@@ -1,0 +1,83 @@
+name: Build APK
+on:
+  repository_dispatch:
+    types: [build-apk]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: اقرأ المدخلات
+        id: cfg
+        run: |
+          APP_NAME="${{ github.event.client_payload.app_name }}"
+          HAS_ICON="${{ github.event.client_payload.has_icon }}"
+          [ -z "$APP_NAME" ] && APP_NAME="MyApp"
+          [ -z "$HAS_ICON" ] && HAS_ICON="false"
+          SAFE_NAME=$(echo "$APP_NAME" | tr -cd 'A-Za-z0-9')
+          [ -z "$SAFE_NAME" ] && SAFE_NAME="MyApp"
+          echo "APP_NAME=$APP_NAME" >> $GITHUB_OUTPUT
+          echo "SAFE_NAME=$SAFE_NAME" >> $GITHUB_OUTPUT
+          echo "HAS_ICON=$HAS_ICON" >> $GITHUB_OUTPUT
+
+      - name: فك ضغط المشروع
+        run: |
+          mkdir -p project
+          if [ -f input/project.zip ]; then
+            unzip -o input/project.zip -d project/
+          else
+            echo "project.zip مفقود في input/"; exit 1
+          fi
+          # إذا ZIP فيه مجلد واحد، ادخل إليه
+          count=$(ls -1 project | wc -l)
+          if [ "$count" -eq 1 ] && [ -d "project/$(ls -1 project | head -1)" ]; then
+            inner=$(ls -1 project | head -1)
+            shopt -s dotglob
+            mv project/$inner/* project/ 2>/dev/null || true
+            shopt -u dotglob
+            rmdir project/$inner 2>/dev/null || true
+          fi
+          ls -la project/ | head -20
+          test -f project/settings.gradle || test -f project/settings.gradle.kts || { echo "settings.gradle مفقود — مشروع Android غير صالح"; exit 1; }
+
+      - name: إعداد Java 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: إعداد Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
+
+      - name: استبدال الأيقونة (اختياري)
+        if: ${{ github.event.client_payload.has_icon == 'true' }}
+        run: |
+          if [ -f input/icon.png ]; then
+            find project/app/src/main/res -name "ic_launcher*.png" -exec cp input/icon.png {} \; 2>/dev/null || true
+          fi
+
+      - name: بناء APK
+        working-directory: project
+        run: |
+          chmod +x gradlew
+          ./gradlew assembleDebug --no-daemon --stacktrace
+
+      - name: نسخ APK
+        run: |
+          mkdir -p output
+          # ابحث عن أي APK ناتج
+          find project -name "*.apk" -path "*/debug/*" -exec cp {} "output/${{ steps.cfg.outputs.SAFE_NAME }}.apk" \;
+          ls -lh output/
+          test -f "output/${{ steps.cfg.outputs.SAFE_NAME }}.apk" || { echo "لم يُنتج أي APK"; exit 1; }
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ steps.cfg.outputs.SAFE_NAME }}-apk
+          path: output/
+          retention-days: 7
