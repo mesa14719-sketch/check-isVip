@@ -38,33 +38,26 @@ jobs:
             echo "لا يوجد أي ZIP في المستودع"; exit 1
           fi
 
-          echo "=== محتوى project/ بعد الفك ==="
-          ls -la project/
-
-          # اكتشف جذر المشروع: ابحث عن settings.gradle أو settings.gradle.kts
           ROOT=""
           if [ -f "project/settings.gradle" ] || [ -f "project/settings.gradle.kts" ]; then
             ROOT="project"
           else
-            # ابحث في أي مجلد فرعي بمستوى واحد
             while IFS= read -r d; do
               if [ -f "$d/settings.gradle" ] || [ -f "$d/settings.gradle.kts" ]; then
-                ROOT="$d"
-                break
+                ROOT="$d"; break
               fi
             done < <(find project -mindepth 1 -maxdepth 1 -type d)
           fi
 
           if [ -z "$ROOT" ]; then
-            echo "لم أجد settings.gradle في أي مجلد"
-            echo "=== شجرة المشروع (3 مستويات) ==="
-            find project -maxdepth 3 -type f | head -50
-            exit 1
+            echo "لم أجد settings.gradle"; find project -maxdepth 3 -type f | head -50; exit 1
           fi
 
           echo "ROOT=$ROOT" >> $GITHUB_ENV
           echo "جذر المشروع: $ROOT"
           ls -la "$ROOT/" | head -30
+          echo "=== هل gradlew موجود؟ ==="
+          ls -la "$ROOT/gradle/wrapper/" 2>/dev/null || echo "لا يوجد gradle/wrapper"
 
       - name: إعداد Java 21
         uses: actions/setup-java@v4
@@ -77,6 +70,22 @@ jobs:
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0'
 
+      - name: تثبيت Gradle (إذا لم يوجد wrapper)
+        run: |
+          cd "$ROOT"
+          if [ ! -f gradlew ]; then
+            echo "gradlew مفقود — تثبيت Gradle 8.7"
+            GRADLE_VERSION=8.7
+            wget -q "https://services.gradle.org/distributions/gradle-${GRADLE_VERSION}-bin.zip" -O /tmp/gradle.zip
+            unzip -q /tmp/gradle.zip -d /opt/
+            export PATH="/opt/gradle-${GRADLE_VERSION}/bin:$PATH"
+            echo "PATH=/opt/gradle-${GRADLE_VERSION}/bin:$PATH" >> $GITHUB_ENV
+            gradle --version
+          else
+            echo "gradlew موجود — استخدامه"
+            chmod +x gradlew
+          fi
+
       - name: استبدال الأيقونة (اختياري)
         if: ${{ github.event.client_payload.has_icon == 'true' }}
         run: |
@@ -87,12 +96,12 @@ jobs:
       - name: بناء APK
         run: |
           cd "$ROOT"
-          if [ ! -f gradlew ]; then
-            echo "gradlew مفقود — تحقق من محتوى ZIP"
-            exit 1
+          if [ -f gradlew ]; then
+            chmod +x gradlew
+            ./gradlew assembleDebug --no-daemon --stacktrace
+          else
+            gradle assembleDebug --no-daemon --stacktrace
           fi
-          chmod +x gradlew
-          ./gradlew assembleDebug --no-daemon --stacktrace
 
       - name: نسخ APK
         run: |
